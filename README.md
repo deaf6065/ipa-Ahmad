@@ -36,6 +36,8 @@ npm start
 - `POST /api/uploads/ipa` أو `POST /api/uploads/zip` — رفع multipart بحقل `file`.
 - `POST /api/files/:id/inspect` — فك وفحص ملف ZIP.
 
+تحد واجهات الرفع والفحص الطلبات المتكررة لكل عنوان عميل، إضافةً إلى حد حجم الملف.
+
 ## الاختبارات
 
 ```sh

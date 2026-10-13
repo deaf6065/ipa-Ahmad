@@ -10,6 +10,7 @@ const yauzl = require('yauzl');
 
 const DEFAULT_MAX_FILE_SIZE = 1024 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 10000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function safeZipTarget(root, entryName) {
   if (
@@ -132,6 +133,38 @@ async function extractAndInspect(zipPath, destination, maxExtractedSize) {
   });
 }
 
+function createRateLimiter(maxRequests, windowMs) {
+  const clients = new Map();
+  let requestsSinceCleanup = 0;
+
+  return (req, res, next) => {
+    const now = Date.now();
+    if (clients.size >= 10000 || ++requestsSinceCleanup % 256 === 0) {
+      for (const [address, entry] of clients) {
+        if (entry.resetAt <= now) clients.delete(address);
+      }
+    }
+
+    const address = req.ip || req.socket.remoteAddress || 'unknown';
+    let entry = clients.get(address);
+    if (!entry) {
+      if (clients.size >= 10000) {
+        res.setHeader('Retry-After', String(Math.ceil(windowMs / 1000)));
+        return res.status(429).json({ error: 'تم تجاوز عدد الطلبات المسموح. حاول لاحقاً.' });
+      }
+      entry = { count: 0, resetAt: now + windowMs };
+      clients.set(address, entry);
+    }
+
+    if (entry.count >= maxRequests) {
+      res.setHeader('Retry-After', String(Math.ceil((entry.resetAt - now) / 1000)));
+      return res.status(429).json({ error: 'تم تجاوز عدد الطلبات المسموح. حاول لاحقاً.' });
+    }
+    entry.count += 1;
+    return next();
+  };
+}
+
 function createApp(options = {}) {
   const dataDir = path.resolve(options.dataDir || process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
   const uploadsDir = path.join(dataDir, 'uploads');
@@ -146,6 +179,7 @@ function createApp(options = {}) {
   fs.mkdirSync(extractedDir, { recursive: true });
 
   const db = new DatabaseSync(path.join(dataDir, 'files.sqlite'));
+  const uploadPaths = new WeakMap();
   db.exec(`
     CREATE TABLE IF NOT EXISTS files (
       id TEXT PRIMARY KEY,
@@ -168,10 +202,16 @@ function createApp(options = {}) {
   const upload = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, callback) => callback(null, uploadsDir),
-      filename: (_req, _file, callback) => callback(null, crypto.randomUUID()),
+      filename: (req, _file, callback) => {
+        const filename = crypto.randomUUID();
+        uploadPaths.set(req, path.join(uploadsDir, filename));
+        callback(null, filename);
+      },
     }),
     limits: { fileSize: maxFileSize, files: 1 },
   });
+  const uploadLimiter = createRateLimiter(20, 15 * 60 * 1000);
+  const inspectLimiter = createRateLimiter(30, 15 * 60 * 1000);
 
   app.get('/api/files', (_req, res) => {
     const files = db
@@ -185,20 +225,22 @@ function createApp(options = {}) {
   });
 
   for (const kind of ['ipa', 'zip']) {
-    app.post(`/api/uploads/${kind}`, upload.single('file'), async (req, res, next) => {
+    app.post(`/api/uploads/${kind}`, uploadLimiter, upload.single('file'), async (req, res, next) => {
+      const temporaryPath = uploadPaths.get(req);
+      uploadPaths.delete(req);
       if (!req.file) {
         return res.status(400).json({ error: 'اختر ملفاً لرفعه.' });
       }
 
       const extension = path.extname(req.file.originalname).toLowerCase();
       if (extension !== `.${kind}`) {
-        await fsp.rm(req.file.path, { force: true });
+        await fsp.rm(temporaryPath, { force: true });
         return res.status(400).json({ error: `هذا المسار يقبل ملفات .${kind} فقط.` });
       }
 
       let finalPath;
       try {
-        const handle = await fsp.open(req.file.path, 'r');
+        const handle = await fsp.open(temporaryPath, 'r');
         const header = Buffer.alloc(4);
         let bytesRead;
         try {
@@ -214,16 +256,16 @@ function createApp(options = {}) {
 
         let archive;
         try {
-          archive = await openZip(req.file.path);
+          archive = await openZip(temporaryPath);
         } catch {
-          await fsp.rm(req.file.path, { force: true });
+          await fsp.rm(temporaryPath, { force: true });
           return res.status(400).json({ error: 'الأرشيف ZIP تالف أو غير صالح.' });
         }
         archive.close();
         const id = crypto.randomUUID();
         const storageName = `${id}.${kind}`;
         finalPath = path.join(uploadsDir, storageName);
-        await fsp.rename(req.file.path, finalPath);
+        await fsp.rename(temporaryPath, finalPath);
 
         const originalName = path.basename(req.file.originalname).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 255);
         const uploadedAt = new Date().toISOString();
@@ -235,17 +277,20 @@ function createApp(options = {}) {
           file: { id, name: originalName || `file.${kind}`, kind, size: req.file.size, uploadedAt },
         });
       } catch (error) {
-        await fsp.rm(req.file.path, { force: true }).catch(() => {});
+        await fsp.rm(temporaryPath, { force: true }).catch(() => {});
         if (finalPath) await fsp.rm(finalPath, { force: true }).catch(() => {});
         return next(error);
       }
     });
   }
 
-  app.post('/api/files/:id/inspect', async (req, res, next) => {
+  app.post('/api/files/:id/inspect', inspectLimiter, async (req, res, next) => {
     try {
+      if (!UUID_PATTERN.test(req.params.id)) {
+        return res.status(404).json({ error: 'الملف غير موجود.' });
+      }
       const file = db
-        .prepare('SELECT id, kind, storage_name FROM files WHERE id = ?')
+        .prepare('SELECT id, kind FROM files WHERE id = ?')
         .get(req.params.id);
       if (!file) return res.status(404).json({ error: 'الملف غير موجود.' });
       if (file.kind !== 'zip') {
@@ -253,8 +298,8 @@ function createApp(options = {}) {
       }
 
       const report = await extractAndInspect(
-        path.join(uploadsDir, file.storage_name),
-        path.join(extractedDir, file.id),
+        path.join(uploadsDir, `${req.params.id}.zip`),
+        safeZipTarget(extractedDir, req.params.id),
         maxFileSize * 2
       );
       return res.json({ report });
@@ -279,4 +324,4 @@ function createApp(options = {}) {
   return app;
 }
 
-module.exports = { createApp, safeZipTarget, extractAndInspect };
+module.exports = { createApp, safeZipTarget, extractAndInspect, createRateLimiter };

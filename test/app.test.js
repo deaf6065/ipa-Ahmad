@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, test } = require('node:test');
-const { createApp, safeZipTarget } = require('../backend/app');
+const { createApp, createRateLimiter, safeZipTarget } = require('../backend/app');
 
 let dataDir;
 let server;
@@ -82,6 +82,28 @@ test('only extracts archive entries inside the selected root', () => {
   assert.throws(() => safeZipTarget(root, 'folder\\..\\outside'), /مسار غير آمن/);
 });
 
+test('rate limits repeated filesystem operations from the same client', () => {
+  const limit = createRateLimiter(1, 60_000);
+  let passed = 0;
+  let statusCode;
+  const response = {
+    setHeader() {},
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json() {
+      return this;
+    },
+  };
+  const request = { ip: 'test-client', socket: { remoteAddress: '127.0.0.1' } };
+
+  limit(request, response, () => { passed += 1; });
+  limit(request, response, () => { passed += 1; });
+  assert.equal(passed, 1);
+  assert.equal(statusCode, 429);
+});
+
 test('uploads a ZIP, lists metadata, and extracts it when inspected', async () => {
   const archive = makeZip('Payload/App.app/Info.plist', '<plist/>');
   const response = await upload('zip', 'sample.zip', archive);
@@ -136,4 +158,9 @@ test('refuses to inspect a non-ZIP item', async () => {
   const uploaded = await response.json();
   const inspected = await fetch(`${baseUrl}/api/files/${uploaded.file.id}/inspect`, { method: 'POST' });
   assert.equal(inspected.status, 400);
+});
+
+test('rejects non-UUID inspection identifiers', async () => {
+  const inspected = await fetch(`${baseUrl}/api/files/../../etc/passwd/inspect`, { method: 'POST' });
+  assert.notEqual(inspected.status, 200);
 });
