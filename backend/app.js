@@ -6,6 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { pipeline } = require('node:stream/promises');
 const express = require('express');
 const multer = require('multer');
+const { rateLimit } = require('express-rate-limit');
 const yauzl = require('yauzl');
 
 const DEFAULT_MAX_FILE_SIZE = 1024 * 1024 * 1024;
@@ -133,38 +134,6 @@ async function extractAndInspect(zipPath, destination, maxExtractedSize) {
   });
 }
 
-function createRateLimiter(maxRequests, windowMs) {
-  const clients = new Map();
-  let requestsSinceCleanup = 0;
-
-  return (req, res, next) => {
-    const now = Date.now();
-    if (clients.size >= 10000 || ++requestsSinceCleanup % 256 === 0) {
-      for (const [address, entry] of clients) {
-        if (entry.resetAt <= now) clients.delete(address);
-      }
-    }
-
-    const address = req.ip || req.socket.remoteAddress || 'unknown';
-    let entry = clients.get(address);
-    if (!entry) {
-      if (clients.size >= 10000) {
-        res.setHeader('Retry-After', String(Math.ceil(windowMs / 1000)));
-        return res.status(429).json({ error: 'تم تجاوز عدد الطلبات المسموح. حاول لاحقاً.' });
-      }
-      entry = { count: 0, resetAt: now + windowMs };
-      clients.set(address, entry);
-    }
-
-    if (entry.count >= maxRequests) {
-      res.setHeader('Retry-After', String(Math.ceil((entry.resetAt - now) / 1000)));
-      return res.status(429).json({ error: 'تم تجاوز عدد الطلبات المسموح. حاول لاحقاً.' });
-    }
-    entry.count += 1;
-    return next();
-  };
-}
-
 function createApp(options = {}) {
   const dataDir = path.resolve(options.dataDir || process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
   const uploadsDir = path.join(dataDir, 'uploads');
@@ -210,8 +179,15 @@ function createApp(options = {}) {
     }),
     limits: { fileSize: maxFileSize, files: 1 },
   });
-  const uploadLimiter = createRateLimiter(20, 15 * 60 * 1000);
-  const inspectLimiter = createRateLimiter(30, 15 * 60 * 1000);
+  const createLimiter = (limit) => rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    handler: (_req, res) => res.status(429).json({ error: 'تم تجاوز عدد الطلبات المسموح. حاول لاحقاً.' }),
+  });
+  const uploadLimiter = createLimiter(20);
+  const inspectLimiter = createLimiter(30);
 
   app.get('/api/files', (_req, res) => {
     const files = db
@@ -250,7 +226,7 @@ function createApp(options = {}) {
         }
         const signatures = ['504b0304', '504b0506', '504b0708'];
         if (bytesRead < 4 || !signatures.includes(header.toString('hex'))) {
-          await fsp.rm(req.file.path, { force: true });
+          await fsp.rm(temporaryPath, { force: true });
           return res.status(400).json({ error: 'محتوى الملف ليس أرشيف ZIP صالحاً.' });
         }
 
@@ -324,4 +300,4 @@ function createApp(options = {}) {
   return app;
 }
 
-module.exports = { createApp, safeZipTarget, extractAndInspect, createRateLimiter };
+module.exports = { createApp, safeZipTarget, extractAndInspect };

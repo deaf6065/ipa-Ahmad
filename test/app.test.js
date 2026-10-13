@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, test } = require('node:test');
-const { createApp, createRateLimiter, safeZipTarget } = require('../backend/app');
+const { createApp, safeZipTarget } = require('../backend/app');
 
 let dataDir;
 let server;
@@ -80,28 +80,6 @@ test('only extracts archive entries inside the selected root', () => {
   assert.throws(() => safeZipTarget(root, '../outside'), /مسار غير آمن/);
   assert.throws(() => safeZipTarget(root, '/outside'), /مسار غير آمن/);
   assert.throws(() => safeZipTarget(root, 'folder\\..\\outside'), /مسار غير آمن/);
-});
-
-test('rate limits repeated filesystem operations from the same client', () => {
-  const limit = createRateLimiter(1, 60_000);
-  let passed = 0;
-  let statusCode;
-  const response = {
-    setHeader() {},
-    status(code) {
-      statusCode = code;
-      return this;
-    },
-    json() {
-      return this;
-    },
-  };
-  const request = { ip: 'test-client', socket: { remoteAddress: '127.0.0.1' } };
-
-  limit(request, response, () => { passed += 1; });
-  limit(request, response, () => { passed += 1; });
-  assert.equal(passed, 1);
-  assert.equal(statusCode, 429);
 });
 
 test('uploads a ZIP, lists metadata, and extracts it when inspected', async () => {
