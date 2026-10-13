@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101923">
+    <title>IPA Ahmad | إدارة الملفات</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="IPA Ahmad الصفحة الرئيسية">
+          <span class="brand-mark">A</span>
+          <span><strong>IPA Ahmad</strong><small>إدارة ملفات التطبيقات</small></span>
+        </a>
+        <span class="secure-label"><span></span> إدارة الملفات</span>
+      </header>
+
+      <section class="intro">
+        <p class="eyebrow">لوحة التحكم</p>
+        <h1>ملفاتك، في مكان واحد.</h1>
+        <p>ارفع ملفات IPA أو ZIP بشكل منفصل، وتابع حالتها من هنا.</p>
+      </section>
+
+      <section class="upload-panel" aria-labelledby="upload-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="upload-title">رفع ملف جديد</h2>
+            <p>الحد الأعلى لحجم الملف: <span id="size-limit">جارٍ التحميل…</span></p>
+          </div>
+          <span class="upload-icon" aria-hidden="true">↑</span>
+        </div>
+        <div class="upload-actions">
+          <button class="button button-primary" id="upload-ipa" type="button">
+            <span aria-hidden="true">＋</span> رفع ملف IPA
+          </button>
+          <button class="button button-secondary" id="upload-zip" type="button">
+            <span aria-hidden="true">＋</span> رفع ملف ZIP
+          </button>
+        </div>
+        <input id="ipa-picker" class="visually-hidden" type="file" accept=".ipa,application/octet-stream">
+        <input id="zip-picker" class="visually-hidden" type="file" accept=".zip,application/zip,application/x-zip-compressed">
+        <div id="upload-status" class="upload-status" role="status" aria-live="polite" hidden>
+          <div class="progress-copy">
+            <span id="status-message"></span><span id="progress-value"></span>
+          </div>
+          <progress id="upload-progress" max="100" value="0"></progress>
+        </div>
+      </section>
+
+      <section class="files-section" aria-labelledby="files-title">
+        <div class="section-heading files-heading">
+          <div>
+            <h2 id="files-title">إدارة التطبيقات</h2>
+            <p>الملفات التي رفعتها إلى الخادم</p>
+          </div>
+          <button id="refresh-files" class="refresh-button" type="button">تحديث القائمة</button>
+        </div>
+        <div id="files-list" class="files-list" aria-live="polite">
+          <div class="empty-state">جارٍ تحميل الملفات…</div>
+        </div>
+      </section>
+
+      <footer>يتم حفظ الملفات على الخادم. ملفات ZIP لا تتحول تلقائياً إلى IPA.</footer>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
