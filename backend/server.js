@@ -2,7 +2,9 @@ const { createApp } = require('./app');
 
 const port = Number(process.env.PORT) || 3000;
 const app = createApp();
-
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`IPA-Ahmad is running on http://localhost:${port}`);
 });
+
+server.requestTimeout = 30 * 60 * 1000;
+server.timeout = 30 * 60 * 1000;

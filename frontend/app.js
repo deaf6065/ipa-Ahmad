@@ -4,6 +4,7 @@ const uploadStatus = document.querySelector('#upload-status');
 const statusMessage = document.querySelector('#status-message');
 const progressValue = document.querySelector('#progress-value');
 const uploadProgress = document.querySelector('#upload-progress');
+const uploadDetail = document.querySelector('#upload-detail');
 const filesList = document.querySelector('#files-list');
 
 document.querySelector('#upload-ipa').addEventListener('click', () => ipaPicker.click());
@@ -24,12 +25,14 @@ function formatSize(bytes) {
   return `${new Intl.NumberFormat('ar', { maximumFractionDigits: 1 }).format(size)} ${units[index]}`;
 }
 
-function showStatus(message, percent = 0, error = false) {
+function showStatus(message, percent = 0, error = false, detail = '') {
   uploadStatus.hidden = false;
   statusMessage.textContent = message;
-  statusMessage.style.color = error ? '#ff9d9d' : '';
+  uploadStatus.classList.toggle('has-error', error);
   progressValue.textContent = `${percent}%`;
   uploadProgress.value = percent;
+  uploadDetail.textContent = detail;
+  uploadDetail.hidden = !detail;
 }
 
 function uploadFile(picker, kind) {
@@ -37,15 +40,26 @@ function uploadFile(picker, kind) {
   picker.value = '';
   if (!file) return;
 
-  showStatus(`جارٍ رفع ${file.name}…`);
+  const startedAt = Date.now();
+  showStatus(`جارٍ رفع ${file.name}…`, 0, false, `حجم الملف: ${formatSize(file.size)}`);
   const body = new FormData();
   body.append('file', file, file.name);
   const request = new XMLHttpRequest();
   request.open('POST', `/api/uploads/${kind}`);
+  request.timeout = 30 * 60 * 1000;
   request.upload.addEventListener('progress', (event) => {
     if (event.lengthComputable) {
       const percent = Math.round((event.loaded / event.total) * 100);
-      showStatus(percent === 100 ? 'اكتمل الرفع، جارٍ التحقق من الملف…' : `جارٍ رفع ${file.name}…`, percent);
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 1);
+      const uploadedBytes = Math.min(file.size, Math.round(file.size * event.loaded / event.total));
+      const speed = uploadedBytes / elapsedSeconds;
+      const detail = `تم رفع ${formatSize(uploadedBytes)} من ${formatSize(file.size)} · السرعة ${formatSize(speed)}/ث`;
+      showStatus(
+        percent === 100 ? 'اكتمل نقل الملف، جارٍ التحقق من الأرشيف…' : `جارٍ رفع ${file.name}…`,
+        percent,
+        false,
+        detail
+      );
     }
   });
   request.addEventListener('load', () => {
@@ -60,10 +74,19 @@ function uploadFile(picker, kind) {
       showStatus(result.error || 'فشل رفع الملف.', 0, true);
       return;
     }
-    showStatus('تم رفع الملف والتحقق منه بنجاح.', 100);
+    showStatus(
+      'تم رفع الملف والتحقق منه بنجاح.',
+      100,
+      false,
+      `${result.file.name} · ${formatSize(result.file.size)} · ${new Intl.DateTimeFormat('ar', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(new Date(result.file.uploadedAt))}`
+    );
     loadFiles();
   });
   request.addEventListener('error', () => showStatus('تعذر الاتصال بالخادم. تحقق من اتصالك وحاول مجدداً.', 0, true));
+  request.addEventListener('timeout', () => showStatus('استغرق الرفع وقتاً أطول من المتوقع. تحقق من اتصالك وحاول مجدداً.', 0, true));
   request.addEventListener('abort', () => showStatus('تم إلغاء رفع الملف.', 0, true));
   request.send(body);
 }
@@ -133,7 +156,7 @@ function createFileRow(file) {
 
 async function inspectFile(file, row, button) {
   button.disabled = true;
-  button.textContent = 'جارٍ الفحص…';
+  button.textContent = 'جارٍ فك الضغط والفحص…';
   let reportElement = row.nextElementSibling;
   if (reportElement?.classList.contains('inspection-report')) reportElement.remove();
   try {
@@ -143,7 +166,7 @@ async function inspectFile(file, row, button) {
     reportElement = document.createElement('div');
     reportElement.className = 'inspection-report';
     const summary = document.createElement('strong');
-    summary.textContent = `اكتمل فك الضغط والفحص: ${result.report.fileCount} ملف، ${formatSize(result.report.extractedBytes)}.`;
+    summary.textContent = `اكتمل فك الضغط والفحص: ${result.report.fileCount} ملف من أصل ${result.report.entryCount} مدخل، بحجم ${formatSize(result.report.extractedBytes)}.`;
     reportElement.append(summary);
     if (result.report.topLevel.length > 0) {
       const list = document.createElement('ul');
