@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, test } = require('node:test');
-const { createApp, safeZipTarget } = require('../backend/app');
+const { createApp, safeZipTarget, DEFAULT_MAX_FILE_SIZE } = require('../backend/app');
 
 let dataDir;
 let server;
@@ -82,6 +82,23 @@ test('only extracts archive entries inside the selected root', () => {
   assert.throws(() => safeZipTarget(root, 'folder\\..\\outside'), /مسار غير آمن/);
 });
 
+test('defaults to a 5 GiB upload limit', async () => {
+  assert.equal(DEFAULT_MAX_FILE_SIZE, 5 * 1024 * 1024 * 1024);
+
+  const defaultDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ipa-ahmad-default-test-'));
+  const defaultApp = createApp({ dataDir: defaultDataDir });
+  const defaultServer = defaultApp.listen(0);
+  try {
+    await new Promise((resolve) => defaultServer.once('listening', resolve));
+    const response = await fetch(`http://127.0.0.1:${defaultServer.address().port}/api/config`);
+    assert.deepEqual(await response.json(), { maxFileSize: 5 * 1024 * 1024 * 1024 });
+  } finally {
+    await new Promise((resolve) => defaultServer.close(resolve));
+    defaultApp.locals.closeDatabase();
+    await fs.rm(defaultDataDir, { recursive: true, force: true });
+  }
+});
+
 test('uploads a ZIP, lists metadata, and extracts it when inspected', async () => {
   const archive = makeZip('Payload/App.app/Info.plist', '<plist/>');
   const response = await upload('zip', 'sample.zip', archive);
@@ -106,6 +123,21 @@ test('uploads a ZIP, lists metadata, and extracts it when inspected', async () =
   );
 });
 
+test('accepts and extracts IPA files contained inside a ZIP archive', async () => {
+  const archive = makeZip('Payload/App.ipa', 'ipa payload');
+  const response = await upload('zip', 'xcode-project.zip', archive);
+  assert.equal(response.status, 201);
+  const { file } = await response.json();
+  const inspected = await fetch(`${baseUrl}/api/files/${file.id}/inspect`, { method: 'POST' });
+  assert.equal(inspected.status, 200);
+  const { report } = await inspected.json();
+  assert.equal(report.entryCount, 1);
+  assert.equal(
+    await fs.readFile(path.join(dataDir, 'extracted', file.id, 'Payload/App.ipa'), 'utf8'),
+    'ipa payload'
+  );
+});
+
 test('rejects an extension mismatch and a non-archive upload', async () => {
   const mismatch = await upload('ipa', 'not-ipa.zip', makeZip('file.txt', 'content'));
   assert.equal(mismatch.status, 400);
@@ -117,7 +149,7 @@ test('rejects an extension mismatch and a non-archive upload', async () => {
   const oversized = await upload('zip', 'large.zip', Buffer.alloc(1024 * 1024 + 1));
   assert.equal(oversized.status, 413);
   const listing = await fetch(`${baseUrl}/api/files`).then((result) => result.json());
-  assert.equal(listing.files.length, 1);
+  assert.equal(listing.files.length, 2);
 });
 
 test('rejects ZIP path traversal and does not write outside the extraction directory', async () => {

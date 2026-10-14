@@ -9,8 +9,8 @@ const multer = require('multer');
 const { rateLimit } = require('express-rate-limit');
 const yauzl = require('yauzl');
 
-const DEFAULT_MAX_FILE_SIZE = 1024 * 1024 * 1024;
-const MAX_ZIP_ENTRIES = 10000;
+const DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 100000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function safeZipTarget(root, entryName) {
@@ -83,6 +83,7 @@ async function extractAndInspect(zipPath, destination, maxExtractedSize) {
       zipFile.close();
       resolve({
         fileCount,
+        entryCount,
         extractedBytes,
         topLevel: [...topLevel].sort(),
       });
@@ -281,6 +282,9 @@ function createApp(options = {}) {
       return res.json({ report });
     } catch (error) {
       if (/[\u0600-\u06FF]/.test(error.message)) return res.status(400).json({ error: error.message });
+      if (error.code === 'ENOSPC') {
+        return res.status(507).json({ error: 'لا توجد مساحة تخزين كافية على الخادم لفك ضغط هذا الأرشيف.' });
+      }
       return res.status(400).json({ error: 'تعذر فك الضغط؛ قد يكون الأرشيف تالفاً أو غير صالح.' });
     }
   });
@@ -293,11 +297,14 @@ function createApp(options = {}) {
       return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: message });
     }
     console.error(error);
-    return res.status(400).json({ error: error.message || 'حدث خطأ غير متوقع.' });
+    const message = error.code === 'ENOSPC'
+      ? 'لا توجد مساحة تخزين كافية على الخادم لحفظ الملف.'
+      : 'حدث خطأ أثناء معالجة الطلب. تحقق من الملف وحاول مرة أخرى.';
+    return res.status(error.code === 'ENOSPC' ? 507 : 500).json({ error: message });
   });
 
   app.locals.closeDatabase = () => db.close();
   return app;
 }
 
-module.exports = { createApp, safeZipTarget, extractAndInspect };
+module.exports = { createApp, safeZipTarget, extractAndInspect, DEFAULT_MAX_FILE_SIZE };
