@@ -1,0 +1,46 @@
+# Xcode
+!*.xcodeproj/
+!*.pbxproj
+*.pbxuser
+*.perspective
+*.perspectivev3
+xcuserdata/
+*.xcworkspace/xcuserdata
+DerivedData/
+build/
+
+# Swift Package Manager
+.build/
+*.xcframework
+
+# CocoaPods
+Pods/
+Podfile.lock
+
+# Carthage
+Carthage/Build
+*.carthage
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+# Code coverage
+coverage.xml
+*.coverage
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.env
+.env.local
